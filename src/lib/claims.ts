@@ -45,6 +45,42 @@ function withinTolerance(claimed: number, actual: number, tolerance = 0.2): bool
   return Math.abs(claimed - actual) / actual <= tolerance;
 }
 
+/**
+ * Remove fenced code blocks and inline code spans. Claims quoted inside
+ * code samples or documentation examples are mentions, not claims.
+ * Badge URLs live outside code spans, so they survive this.
+ */
+function stripCode(markdown: string): string {
+  return markdown
+    .replace(/```[\s\S]*?```/g, " ")
+    .replace(/~~~[\s\S]*?~~~/g, " ")
+    .replace(/`[^`\n]+`/g, " ");
+}
+
+const QUOTE_OPEN = new Set(['"', "'", "“", "‘"]);
+const QUOTE_CLOSE = new Set(['"', "'", "”", "’"]);
+
+/**
+ * Find the first match that is not wrapped in quotes. A quoted phrase
+ * ("zero dependencies" in a docs table) is being talked about, not claimed.
+ */
+function findUnquoted(text: string, pattern: RegExp): RegExpExecArray | null {
+  const flags = pattern.flags.includes("g") ? pattern.flags : `${pattern.flags}g`;
+  const re = new RegExp(pattern.source, flags);
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text)) !== null) {
+    const before = m.index > 0 ? text[m.index - 1] : "";
+    // Patterns may match a word prefix ("zero dependenc"); look past the
+    // rest of the word before checking for a closing quote.
+    let end = m.index + m[0].length;
+    while (end < text.length && /[\w]/.test(text[end])) end++;
+    const after = text[end] ?? "";
+    if (QUOTE_OPEN.has(before) && QUOTE_CLOSE.has(after)) continue;
+    return m;
+  }
+  return null;
+}
+
 /* ------------------------------------------------------------------ */
 /* License                                                             */
 /* ------------------------------------------------------------------ */
@@ -89,7 +125,8 @@ function checkLicense(readme: string, data: RepoData): ClaimResult | null {
 
   const dynamicBadge = /img\.shields\.io\/(github\/license|npm\/l)\//i.test(readme);
   const staticBadge = readme.match(/badge\/license-([^"')\]\s]+)/i);
-  const textClaim = readme.match(
+  const textClaim = findUnquoted(
+    readme,
     /\b(MIT|Apache(?:\s*2\.0)?|GPL(?:\s*v?[23](?:\.0)?)?|AGPL(?:\s*v?3(?:\.0)?)?|BSD(?:\s*[23]-Clause)?|ISC|MPL(?:\s*2\.0)?|Unlicense)\s+Licen[cs]e\b/i,
   );
 
@@ -135,10 +172,7 @@ function checkLicense(readme: string, data: RepoData): ClaimResult | null {
 
 function checkZeroDependencies(readme: string, data: RepoData): ClaimResult | null {
   const claimsZero =
-    /zero[- ]dependenc/i.test(readme) ||
-    /\bno dependencies\b/i.test(readme) ||
-    /\b0 dependencies\b/i.test(readme) ||
-    /dependency[- ]free/i.test(readme) ||
+    findUnquoted(readme, /zero[- ]dependenc|\bno dependencies\b|\b0 dependencies\b|dependency[- ]free/i) !== null ||
     /badge\/dependencies-0\b/i.test(readme);
   if (!claimsZero) return null;
 
@@ -170,7 +204,8 @@ function checkCi(readme: string, data: RepoData): ClaimResult | null {
     /actions\/workflows\/[^)\s"']+\/badge\.svg/i.test(readme) ||
     /img\.shields\.io\/github\/actions\/workflow\/status\//i.test(readme);
   const staticPassing =
-    /badge\/(build|ci|tests?|workflow)-passing/i.test(readme) || /\bbuild passing\b/i.test(readme);
+    /badge\/(build|ci|tests?|workflow)-passing/i.test(readme) ||
+    findUnquoted(readme, /\bbuild passing\b/i) !== null;
   const externalCi = /travis-ci\.(com|org)/i.test(readme) || /circleci\.com/i.test(readme);
 
   if (!dynamicBadge && !staticPassing && !externalCi) return null;
@@ -245,8 +280,8 @@ const KNOWN_LANGUAGES = [
 ];
 
 function checkLanguage(readme: string, data: RepoData): ClaimResult | null {
-  const hundred = readme.match(/\b100%\s+([A-Za-z#+]+)/);
-  const written = readme.match(/\b(?:written|built|developed|implemented|coded)\s+(?:in|with)\s+([A-Za-z#+]+)/i);
+  const hundred = findUnquoted(readme, /\b100%\s+([A-Za-z#+]+)/);
+  const written = findUnquoted(readme, /\b(?:written|built|developed|implemented|coded)\s+(?:in|with)\s+([A-Za-z#+]+)/i);
   const dynamicTop = /img\.shields\.io\/github\/languages\/top\//i.test(readme);
   const rawClaim = hundred?.[1] ?? written?.[1] ?? null;
 
@@ -338,7 +373,7 @@ function checkVersion(readme: string, data: RepoData): ClaimResult | null {
   const staticBadge = readme.match(
     /badge\/(?:version|release|v)-v?(\d+\.\d+(?:\.\d+)?(?:-(?:alpha|beta|rc|pre|dev|next|canary)[\w.]*)?)/i,
   );
-  const textClaim = readme.match(/latest version[:\s]+v?(\d+\.\d+\.\d+)/i);
+  const textClaim = findUnquoted(readme, /latest version[:\s]+v?(\d+\.\d+\.\d+)/i);
 
   if (!dynamicBadge && !staticBadge && !textClaim) return null;
 
@@ -385,14 +420,13 @@ function checkVersion(readme: string, data: RepoData): ClaimResult | null {
 
 function checkMaintained(readme: string, data: RepoData): ClaimResult | null {
   const negative =
-    /\bnot (?:actively )?maintained\b/i.test(readme) ||
-    /\bno longer maintained\b/i.test(readme) ||
-    /\bunmaintained\b/i.test(readme) ||
-    /\bthis (?:project|repo|repository|package) is (?:deprecated|abandoned)\b/i.test(readme);
+    findUnquoted(
+      readme,
+      /\bnot (?:actively )?maintained\b|\bno longer maintained\b|\bunmaintained\b|\bthis (?:project|repo|repository|package) is (?:deprecated|abandoned)\b/i,
+    ) !== null;
   const positive =
-    /\bactively (?:maintained|developed)\b/i.test(readme) ||
-    /\bunder active development\b/i.test(readme) ||
-    /\bwell[- ]maintained\b/i.test(readme);
+    findUnquoted(readme, /\bactively (?:maintained|developed)\b|\bunder active development\b|\bwell[- ]maintained\b/i) !==
+    null;
 
   if (!negative && !positive) return null;
 
@@ -439,8 +473,8 @@ function checkMaintained(readme: string, data: RepoData): ClaimResult | null {
 function checkStars(readme: string, data: RepoData): ClaimResult | null {
   const dynamicBadge = /img\.shields\.io\/github\/stars\//i.test(readme);
   const textClaim =
-    readme.match(/(\d[\d,]*(?:\.\d+)?\s?[kKmM]?)\+?\s*(?:github\s*)?stars\b/i) ??
-    readme.match(/★\s*(\d[\d,]*)/);
+    findUnquoted(readme, /(\d[\d,]*(?:\.\d+)?\s?[kKmM]?)\+?\s*(?:github\s*)?stars\b/i) ??
+    findUnquoted(readme, /★\s*(\d[\d,]*)/);
 
   if (!dynamicBadge && !textClaim) return null;
 
@@ -482,7 +516,7 @@ function checkStars(readme: string, data: RepoData): ClaimResult | null {
 
 function checkContributors(readme: string, data: RepoData): ClaimResult | null {
   const dynamicBadge = /img\.shields\.io\/github\/contributors\//i.test(readme);
-  const textClaim = readme.match(/(\d[\d,]*)\+?\s*contributors\b/i);
+  const textClaim = findUnquoted(readme, /(\d[\d,]*)\+?\s*contributors\b/i);
 
   if (!dynamicBadge && !textClaim) return null;
 
@@ -534,10 +568,11 @@ export function runChecks(readme: string, data: RepoData): ClaimResult[] {
     checkStars,
     checkContributors,
   ];
+  const cleaned = stripCode(readme);
   const results: ClaimResult[] = [];
   for (const check of checkers) {
     try {
-      const result = check(readme, data);
+      const result = check(cleaned, data);
       if (result) results.push(result);
     } catch {
       // A single broken checker must never take down the whole report.

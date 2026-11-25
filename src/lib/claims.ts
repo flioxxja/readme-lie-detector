@@ -74,15 +74,20 @@ const LICENSE_ALIASES: Record<string, string> = {
 };
 
 function normalizeLicense(raw: string): string | null {
-  const decoded = decodeURIComponent(raw).replace(/--/g, "-").replace(/_/g, " ").trim();
-  const key = decoded.toLowerCase().replace(/\s+/g, " ");
+  // Shields badges look like badge/<label>-<value>-<color>.svg where "--"
+  // is a literal dash. Strip the query, the ".svg" and the color segment.
+  let value = decodeURIComponent(raw).split(/[?#]/)[0].replace(/\.svg$/i, "");
+  value = value.replace(/--/g, "\u0001");
+  value = value.split("-")[0];
+  value = value.replace(/\u0001/g, "-").replace(/_/g, " ").trim();
+  const key = value.toLowerCase().replace(/\s+/g, " ");
   return LICENSE_ALIASES[key] ?? null;
 }
 
 function checkLicense(readme: string, data: RepoData): ClaimResult | null {
   const actual = data.summary.license;
 
-  const dynamicBadge = /img\.shields\.io\/github\/license\//i.test(readme);
+  const dynamicBadge = /img\.shields\.io\/(github\/license|npm\/l)\//i.test(readme);
   const staticBadge = readme.match(/badge\/license-([^"')\]\s]+)/i);
   const textClaim = readme.match(
     /\b(MIT|Apache(?:\s*2\.0)?|GPL(?:\s*v?[23](?:\.0)?)?|AGPL(?:\s*v?3(?:\.0)?)?|BSD(?:\s*[23]-Clause)?|ISC|MPL(?:\s*2\.0)?|Unlicense)\s+Licen[cs]e\b/i,
@@ -241,15 +246,30 @@ const KNOWN_LANGUAGES = [
 
 function checkLanguage(readme: string, data: RepoData): ClaimResult | null {
   const hundred = readme.match(/\b100%\s+([A-Za-z#+]+)/);
-  const written = readme.match(/\b(?:written|built|developed|implemented|coded)\s+in\s+([A-Za-z#+]+)/i);
+  const written = readme.match(/\b(?:written|built|developed|implemented|coded)\s+(?:in|with)\s+([A-Za-z#+]+)/i);
+  const dynamicTop = /img\.shields\.io\/github\/languages\/top\//i.test(readme);
   const rawClaim = hundred?.[1] ?? written?.[1] ?? null;
-  if (!rawClaim) return null;
+
+  const entries = Object.entries(data.languages).sort((a, b) => b[1] - a[1]);
+  const total = entries.reduce((sum, [, bytes]) => sum + bytes, 0);
+
+  if (!rawClaim) {
+    if (dynamicTop && entries.length > 0 && total > 0) {
+      const [topLang, topBytes] = entries[0];
+      return {
+        id: "language",
+        title: "Language",
+        claim: "Top-language badge (dynamic)",
+        status: "true",
+        evidence: `Top language: ${topLang} at ${Math.round((topBytes / total) * 100)}% of the codebase. The badge is dynamic, so it always mirrors GitHub's breakdown.`,
+      };
+    }
+    return null;
+  }
 
   const claimed = KNOWN_LANGUAGES.find((l) => l.toLowerCase() === rawClaim.toLowerCase());
   if (!claimed) return null;
 
-  const entries = Object.entries(data.languages).sort((a, b) => b[1] - a[1]);
-  const total = entries.reduce((sum, [, bytes]) => sum + bytes, 0);
   if (total === 0 || entries.length === 0) {
     return {
       id: "language",
@@ -315,7 +335,9 @@ function checkVersion(readme: string, data: RepoData): ClaimResult | null {
     /img\.shields\.io\/github\/v\/release\//i.test(readme) ||
     /img\.shields\.io\/npm\/v\//i.test(readme) ||
     /img\.shields\.io\/github\/release\//i.test(readme);
-  const staticBadge = readme.match(/badge\/(?:version|release|v)-v?(\d+\.\d+(?:\.\d+)?(?:[-+][\w.]+)?)/i);
+  const staticBadge = readme.match(
+    /badge\/(?:version|release|v)-v?(\d+\.\d+(?:\.\d+)?(?:-(?:alpha|beta|rc|pre|dev|next|canary)[\w.]*)?)/i,
+  );
   const textClaim = readme.match(/latest version[:\s]+v?(\d+\.\d+\.\d+)/i);
 
   if (!dynamicBadge && !staticBadge && !textClaim) return null;

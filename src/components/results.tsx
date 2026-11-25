@@ -94,16 +94,12 @@ function formatDate(iso: string | null): string {
 export function RepoCard({ repo }: { repo: RepoSummary }) {
   return (
     <div className="flex items-start gap-4">
-      {repo.avatarUrl ? (
-        // eslint-disable-next-line @next/next/no-img-element
-        <img
-          src={repo.avatarUrl}
-          alt=""
-          width={48}
-          height={48}
-          className="h-12 w-12 shrink-0 rounded-md border border-line"
-        />
-      ) : null}
+      <div
+        aria-hidden="true"
+        className="flex h-12 w-12 shrink-0 items-center justify-center rounded-md border border-line bg-panel font-mono text-lg font-bold text-paper"
+      >
+        {repo.owner.charAt(0).toUpperCase()}
+      </div>
       <div className="min-w-0">
         <a
           href={repo.url}
